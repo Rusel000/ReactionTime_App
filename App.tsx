@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   SafeAreaView,
   StatusBar,
@@ -6,56 +6,107 @@ import {
   Text,
   TouchableOpacity,
   View,
-  Image,
+  TextInput,
   Modal,
+  Image,
+  ScrollView,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { supabase } from "./supabase";
 
 export default function App() {
+  /* ================= IGN ================= */
+  const [ign, setIgn] = useState("");
+  const [ready, setReady] = useState(false);
+
+  /* ================= GAME ================= */
   const [started, setStarted] = useState(false);
   const [canTap, setCanTap] = useState(false);
-  const [message, setMessage] = useState("Press START TEST to begin");
+  const [message, setMessage] = useState("Press START");
 
   const [tries, setTries] = useState(0);
-  const [showJumpscare, setShowJumpscare] = useState(false);
-
   const [startTime, setStartTime] = useState<number | null>(null);
-  const [reactionTimes, setReactionTimes] = useState<number[]>([]);
 
-  const [sessionBest, setSessionBest] = useState<number | null>(null);
-  const [sessionDone, setSessionDone] = useState(false);
+  const [bestTime, setBestTime] = useState<number | null>(null);
 
-  const [globalBest, setGlobalBest] = useState<number | null>(null);
+  const [done, setDone] = useState(false);
+  const [jumpscare, setJumpscare] = useState(false);
 
-  // 🧠 Rank system (FIXED)
-  const getRank = (time: number) => {
-    if (time <= 150) return "🔥 GOD MODE";
-    if (time <= 180) return "💎 DIAMOND";
-    if (time <= 220) return "🔷 PLATINUM";
-    if (time <= 260) return "🟡 GOLD";
-    if (time <= 300) return "⚪ SILVER";
-    return "🟤 BRONZE";
+  /* ================= LEADERBOARD ================= */
+  const [board, setBoard] = useState<any[]>([]);
+
+  /* ================= FETCH ================= */
+  const fetchBoard = async () => {
+    const { data, error } = await supabase
+      .from("leaderboard")
+      .select("*")
+      .order("best_time", { ascending: true });
+
+    if (error) {
+      console.log("FETCH ERROR:", error.message);
+      return;
+    }
+
+    console.log("📊 LOADED DATA:", data);
+    setBoard(data || []);
   };
 
-  const currentRank =
-    sessionBest !== null ? getRank(sessionBest) : "";
+  /* ================= INIT ================= */
+  useEffect(() => {
+    fetchBoard();
 
-  const startFakeTest = () => {
+    const channel = supabase
+      .channel("board-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "leaderboard" },
+        () => fetchBoard()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  /* ================= SAVE SCORE ================= */
+  const saveScore = async (time: number) => {
+    console.log("🚀 SAVING:", { ign, time });
+
+    const { data, error } = await supabase
+      .from("leaderboard")
+      .insert([
+        {
+          ign: ign.trim(),
+          best_time: time,
+        },
+      ])
+      .select();
+
+    if (error) {
+      console.log("❌ SAVE ERROR:", error.message);
+    } else {
+      console.log("✅ SAVED:", data);
+    }
+  };
+
+  /* ================= START GAME ================= */
+  const startGame = () => {
     setStarted(true);
     setCanTap(false);
-    setMessage("Wait for GREEN...");
+    setMessage("Wait...");
 
     const delay = Math.floor(Math.random() * 3000) + 2000;
 
-    // JUMPSCARE ON 3RD ATTEMPT
+    // 💀 jumpscare at 3rd attempt
     if (tries === 2) {
       const scareDelay = delay - 500;
 
       setTimeout(() => {
-        setShowJumpscare(true);
+        setJumpscare(true);
 
         setTimeout(() => {
-          setShowJumpscare(false);
+          setJumpscare(false);
           resetGame();
         }, 2500);
       }, scareDelay);
@@ -65,305 +116,227 @@ export default function App() {
 
     setTimeout(() => {
       setCanTap(true);
-      setMessage("TAP NOW!");
+      setMessage("TAP!");
       setStartTime(Date.now());
     }, delay);
   };
 
+  /* ================= TAP ================= */
   const handleTap = () => {
     if (!canTap || !startTime) return;
 
-    const reactionTime = Date.now() - startTime;
-
-    const updated = [...reactionTimes, reactionTime];
-    setReactionTimes(updated);
+    const reaction = Date.now() - startTime;
 
     const newTry = tries + 1;
     setTries(newTry);
 
-    setMessage(`Reaction Time: ${reactionTime}ms`);
+    // 🧠 compute best instantly (NO STATE BUG)
+    const currentBest =
+      bestTime === null ? reaction : Math.min(bestTime, reaction);
+
+    setBestTime(currentBest);
+
+    setMessage(`${reaction}ms`);
 
     setStarted(false);
     setCanTap(false);
     setStartTime(null);
 
-    // AFTER 3 ATTEMPTS
     if (newTry === 3) {
-      const best = Math.min(...updated);
-      setSessionBest(best);
-      setSessionDone(true);
+      setDone(true);
 
-      if (globalBest === null || best < globalBest) {
-        setGlobalBest(best);
-      }
+      console.log("🏁 FINAL BEST:", currentBest);
+
+      saveScore(currentBest);
     }
   };
 
+  /* ================= RESET ================= */
   const resetGame = () => {
     setStarted(false);
     setCanTap(false);
-    setMessage("Press START TEST to begin");
+    setMessage("Press START");
     setTries(0);
     setStartTime(null);
-
-    setReactionTimes([]);
-    setSessionBest(null);
-    setSessionDone(false);
+    setBestTime(null);
+    setDone(false);
   };
 
+  /* ================= IGN SCREEN ================= */
+  if (!ready) {
+    return (
+      <LinearGradient colors={["#000", "#111"]} style={styles.container}>
+        <SafeAreaView style={styles.center}>
+          <Text style={styles.title}>REFLEX IQ</Text>
+
+          <TextInput
+            placeholder="Enter IGN"
+            placeholderTextColor="#888"
+            style={styles.input}
+            value={ign}
+            onChangeText={setIgn}
+          />
+
+          <TouchableOpacity
+            style={styles.button}
+            onPress={() => {
+              if (ign.trim().length < 3) {
+                alert("IGN too short");
+                return;
+              }
+              setReady(true);
+            }}
+          >
+            <Text style={styles.btnText}>START</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </LinearGradient>
+    );
+  }
+
+  /* ================= MAIN ================= */
   return (
     <>
       <StatusBar hidden />
 
       {/* JUMPSCARE */}
-      <Modal visible={showJumpscare} animationType="none">
-        <View style={styles.jumpscareContainer}>
+      <Modal visible={jumpscare} animationType="none">
+        <View style={styles.jumpscare}>
           <Image
             source={{
               uri: "https://i.pinimg.com/474x/d9/c8/a1/d9c8a174c2ee169ecc24cf652b04190b.jpg",
             }}
-            style={styles.jumpscareImage}
+            style={styles.jumpscareImg}
           />
-          <Text style={styles.jumpscareText}>BADING!!!</Text>
+          <Text style={styles.jumpscareText}>BOO!</Text>
         </View>
       </Modal>
 
-      {/* MAIN APP */}
-      <LinearGradient
-        colors={["#000000", "#0d0d0d", "#161616"]}
-        style={styles.container}
-      >
-        <SafeAreaView style={styles.safeArea}>
-          
-          {/* TOP */}
-          <View style={styles.topSection}>
-            <Text style={styles.icon}>⚡</Text>
+      <LinearGradient colors={["#000", "#111", "#222"]} style={styles.container}>
+        <SafeAreaView style={styles.center}>
+          <Text style={styles.ignText}>Player: {ign}</Text>
 
-            <Text style={styles.title}>REFLEX IQ</Text>
-
-            <Text style={styles.subtitle}>
-              Test your speed and reaction time
-            </Text>
-
-            {/* 🥇 GLOBAL BEST */}
-            <Text style={styles.rankText}>
-              🥇 Fastest: {globalBest ?? "--"}ms
-            </Text>
-
-            {/* 🏆 FINAL RANK (FIXED - ALWAYS SHOWS AFTER 3 TRIES) */}
-            {sessionDone && sessionBest !== null && (
-              <Text style={styles.finalRank}>
-                🏆 Rank: {currentRank}
-              </Text>
-            )}
-          </View>
-
-          {/* CARD */}
           <View style={styles.card}>
             <Text style={styles.cardTitle}>
-              {sessionDone ? "RESULTS" : canTap ? "TAP!" : "READY?"}
+              {done ? "RESULT" : "REACTION TEST"}
             </Text>
 
-            <Text style={styles.cardDescription}>{message}</Text>
+            <Text style={styles.message}>{message}</Text>
 
-            <Text style={styles.tryText}>Attempt: {tries}/3</Text>
+            <Text style={styles.try}>Try: {tries}/3</Text>
 
-            {/* SESSION RESULT */}
-            {sessionDone && (
-              <View style={{ marginTop: 20, alignItems: "center" }}>
-                <Text style={{ color: "#00e676", fontSize: 22, fontWeight: "bold" }}>
-                  SESSION COMPLETE 🏁
-                </Text>
-
-                <Text style={{ color: "#fff", marginTop: 10 }}>
-                  Best Score: {sessionBest}ms
-                </Text>
-
-                <Text style={{ color: "#aaa", marginTop: 10 }}>
-                  Average:{" "}
-                  {Math.floor(
-                    reactionTimes.reduce((a, b) => a + b, 0) /
-                      reactionTimes.length
-                  )}
-                  ms
-                </Text>
-              </View>
-            )}
-
-            {/* HISTORY */}
-            {reactionTimes.length > 0 && (
-              <View style={{ marginTop: 15 }}>
-                <Text style={{ color: "#aaa", textAlign: "center" }}>
-                  Recent Scores
-                </Text>
-
-                {reactionTimes
-                  .slice(-5)
-                  .reverse()
-                  .map((time, index) => (
-                    <Text
-                      key={index}
-                      style={{ color: "#fff", textAlign: "center" }}
-                    >
-                      #{index + 1}: {time}ms ({getRank(time)})
-                    </Text>
-                  ))}
-              </View>
-            )}
-
-            {/* BUTTONS */}
-            {!started && !sessionDone && (
-              <TouchableOpacity style={styles.button} onPress={startFakeTest}>
-                <Text style={styles.buttonText}>START TEST</Text>
+            {!started && !done && (
+              <TouchableOpacity style={styles.button} onPress={startGame}>
+                <Text style={styles.btnText}>START TEST</Text>
               </TouchableOpacity>
             )}
 
             {canTap && (
-              <TouchableOpacity
-                style={[styles.tapArea, { backgroundColor: "#00c853" }]}
-                onPress={handleTap}
-              >
-                <Text style={styles.tapText}>TAP!</Text>
+              <TouchableOpacity style={styles.tap} onPress={handleTap}>
+                <Text style={styles.tapText}>TAP</Text>
               </TouchableOpacity>
             )}
 
-            {sessionDone && (
+            {done && (
               <TouchableOpacity style={styles.button} onPress={resetGame}>
-                <Text style={styles.buttonText}>TRY AGAIN</Text>
+                <Text style={styles.btnText}>TRY AGAIN</Text>
               </TouchableOpacity>
             )}
           </View>
 
-          <Text style={styles.footerText}>Challenge your friends</Text>
+          {/* LEADERBOARD */}
+          <ScrollView>
+            <Text style={styles.boardTitle}>🏆 Leaderboard</Text>
+
+            {board.length === 0 ? (
+              <Text style={{ color: "#aaa", textAlign: "center" }}>
+                No scores yet
+              </Text>
+            ) : (
+              board.map((item, i) => (
+                <Text key={item.id} style={styles.item}>
+                  #{i + 1} {item.ign} — {item.best_time}ms
+                </Text>
+              ))
+            )}
+          </ScrollView>
         </SafeAreaView>
       </LinearGradient>
     </>
   );
 }
 
-/* STYLES */
+/* ================= STYLES ================= */
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  center: { flex: 1, padding: 20, justifyContent: "center" },
 
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: 24,
-    justifyContent: "space-between",
-    paddingVertical: 40,
-  },
+  title: { color: "#fff", fontSize: 30, textAlign: "center" },
 
-  topSection: {
-    alignItems: "center",
+  input: {
+    backgroundColor: "#222",
+    color: "#fff",
+    padding: 15,
+    borderRadius: 10,
     marginTop: 20,
-  },
-
-  icon: { fontSize: 45, marginBottom: 15 },
-
-  title: {
-    color: "#fff",
-    fontSize: 42,
-    fontWeight: "900",
-  },
-
-  subtitle: {
-    color: "#8a8a8a",
-    fontSize: 16,
-    marginTop: 10,
-    textAlign: "center",
-  },
-
-  rankText: {
-    color: "#ffd700",
-    fontSize: 16,
-    fontWeight: "bold",
-    marginTop: 10,
-    textAlign: "center",
-  },
-
-  finalRank: {
-    color: "#ffcc00",
-    fontSize: 18,
-    fontWeight: "900",
-    marginTop: 6,
-    textAlign: "center",
-  },
-
-  card: {
-    backgroundColor: "#111",
-    borderRadius: 28,
-    padding: 28,
-    borderWidth: 1,
-    borderColor: "#222",
-    minHeight: 380,
-    justifyContent: "center",
-  },
-
-  cardTitle: {
-    color: "#fff",
-    fontSize: 30,
-    fontWeight: "900",
-    textAlign: "center",
-    marginBottom: 18,
-  },
-
-  cardDescription: {
-    color: "#b0b0b0",
-    fontSize: 18,
-    textAlign: "center",
-    marginBottom: 20,
-  },
-
-  tryText: {
-    color: "#666",
-    textAlign: "center",
-    fontSize: 15,
   },
 
   button: {
     backgroundColor: "#ff2d2d",
-    paddingVertical: 18,
-    borderRadius: 18,
-    alignItems: "center",
-    marginTop: 20,
+    padding: 15,
+    borderRadius: 10,
+    marginTop: 10,
   },
 
-  buttonText: {
-    color: "#fff",
-    fontSize: 20,
-    fontWeight: "900",
-  },
+  btnText: { color: "#fff", textAlign: "center", fontWeight: "bold" },
 
-  tapArea: {
-    marginTop: 20,
-    paddingVertical: 35,
+  ignText: { color: "#0f0", textAlign: "center", marginBottom: 10 },
+
+  card: {
+    backgroundColor: "#111",
+    padding: 20,
     borderRadius: 20,
-    alignItems: "center",
+    marginBottom: 20,
   },
 
-  tapText: {
+  cardTitle: { color: "#fff", fontSize: 22, textAlign: "center" },
+
+  message: { color: "#aaa", textAlign: "center", marginVertical: 10 },
+
+  try: { color: "#888", textAlign: "center" },
+
+  tap: {
+    backgroundColor: "#00c853",
+    padding: 30,
+    borderRadius: 10,
+  },
+
+  tapText: { color: "#fff", textAlign: "center", fontSize: 20 },
+
+  boardTitle: {
     color: "#fff",
-    fontSize: 34,
-    fontWeight: "900",
-  },
-
-  footerText: {
-    color: "#555",
     textAlign: "center",
-    fontSize: 15,
+    fontSize: 20,
+    marginTop: 20,
   },
 
-  jumpscareContainer: {
+  item: {
+    color: "#aaa",
+    textAlign: "center",
+    marginTop: 5,
+  },
+
+  jumpscare: {
     flex: 1,
     backgroundColor: "black",
     justifyContent: "center",
     alignItems: "center",
   },
 
-  jumpscareImage: {
+  jumpscareImg: {
     width: "100%",
     height: "100%",
     position: "absolute",
-    resizeMode: "cover",
   },
 
   jumpscareText: {
