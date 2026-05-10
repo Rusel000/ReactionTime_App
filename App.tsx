@@ -204,7 +204,7 @@ export default function App() {
         <View style={styles.jumpscare}>
           <Image
             source={{
-              uri: "https://i.pinimg.com/474x/d9/c8/a1/d9c8a174c2ee169ecc24cf652b04190b.jpg",
+              uri: "https://us-tuna-sounds-images.voicemod.net/b3d28416-2174-4bb9-9dbd-9f8f57e00e93-1680877216674.png",
             }}
             style={styles.jumpscareImg}
           />
